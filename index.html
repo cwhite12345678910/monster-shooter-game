@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monster Shooter Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom CSS for the game canvas and overall layout */
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Prevent scrolling */
+            width: 100%; /* Ensure full width */
+            height: 100%; /* Ensure full height */
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #1a202c; /* Dark background for the page */
+            font-family: 'Inter', sans-serif; /* Use Inter font */
+        }
+
+        /* Container for the Phaser canvas, important for scaling */
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex; /* Use flexbox to center canvas within container */
+            justify-content: center;
+            align-items: center;
+            position: relative; /* Needed for absolute positioning of HTML elements over canvas */
+        }
+
+        /* Style the Phaser canvas */
+        canvas {
+            display: block; /* Remove extra space below canvas */
+            border-radius: 10px; /* Rounded corners for the game canvas */
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5); /* Glowing effect */
+            /* Phaser's Scale Manager will handle width/height when fullscreen */
+            /* max-width and max-height can be removed if relying purely on Phaser Scale.FIT */
+            max-width: 100%; /* Ensure canvas is responsive when not fullscreen */
+            max-height: 100%; /* Maintain aspect ratio when not fullscreen */
+        }
+
+        /* Style for the custom HTML input field */
+        .custom-input {
+            position: absolute; /* Position over the canvas */
+            font-family: 'Inter', sans-serif;
+            font-size: 20px;
+            background-color: #444;
+            color: #fff;
+            border: 2px solid #00ffff;
+            border-radius: 5px;
+            padding: 8px 12px;
+            width: 200px;
+            text-align: center;
+            outline: none;
+            box-sizing: border-box; /* Include padding and border in the element's total width and height. */
+            z-index: 1000; /* Ensure it's on top of Phaser elements */
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
+</head>
+<body>
+
+<div id="game-container"></div>
+
+<script>
+    // --- Leaderboard Utility Functions ---
+    // These functions handle saving and loading leaderboard data from localStorage.
+    // They are defined globally so all scenes can access them easily.
+    const LEADERBOARD_KEY = 'monsterShooterLeaderboard';
+
+    /**
+     * Loads the leaderboard data from localStorage.
+     * @returns {Array} An array of leaderboard entries, or an empty array if none exist or an error occurs.
+     */
+    function loadLeaderboard() {
+        try {
+            const leaderboardData = localStorage.getItem(LEADERBOARD_KEY);
+            return leaderboardData ? JSON.parse(leaderboardData) : [];
+        } catch (e) {
+            console.error("Failed to load leaderboard from localStorage:", e);
+            return [];
+        }
+    }
+
+    /**
+     * Saves the provided leaderboard data to localStorage.
+     * @param {Array} leaderboard - The array of leaderboard entries to save.
+     */
+    function saveLeaderboard(leaderboard) {
+        try {
+            localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(leaderboard));
+        } catch (e) {
+            console.error("Failed to save leaderboard to localStorage:", e);
+        }
+    }
+
+    /**
+     * Adds a new score to the leaderboard, sorts it, and trims it to the top 10.
+     * @param {string} name - The name of the player.
+     * @param {number} round - The round number achieved by the player.
+     */
+    function addScoreToLeaderboard(name, round) {
+        let leaderboard = loadLeaderboard();
+        leaderboard.push({ name: name, round: round });
+        // Sort by round in descending order (highest round first)
+        leaderboard.sort((a, b) => b.round - a.round);
+        // Keep only the top 10 entries
+        if (leaderboard.length > 10) {
+            leaderboard = leaderboard.slice(0, 10);
+        }
+        saveLeaderboard(leaderboard);
+    }
+
+    // --- Start Scene ---
+    class StartScene extends Phaser.Scene {
+        constructor() {
+            super({ key: 'StartScene' });
+            // Stores references to leaderboard text objects for clearing on redraw
+            this.leaderboardTextObjects = [];
+        }
+
+        preload() {
+            // No specific assets to preload for the start screen if everything is drawn with graphics.
+        }
+
+        create() {
+            // Draw a large purple monster in the background
+            const monsterGraphics = this.add.graphics();
+            this.drawMonster(monsterGraphics);
+            // Position and scale the monster to be large and somewhat centered/visible in the background
+            monsterGraphics.x = this.scale.width / 2;
+            monsterGraphics.y = this.scale.height / 2;
+            monsterGraphics.setScale(5); // Make it much larger
+            monsterGraphics.setAlpha(0.2); // Make it semi-transparent for a background effect
+
+            // Game Title
+            this.add.text(this.scale.width / 2, this.scale.height / 2 - 100, 'Monster Shooter', {
+                fontSize: '48px',
+                fill: '#fff',
+                align: 'center',
+                fontFamily: 'Inter, sans-serif'
+            }).setOrigin(0.5);
+
+            // Start Game Button
+            const startButton = this.add.text(this.scale.width / 2, this.scale.height / 2 + 50, 'Start Game', {
+                fontSize: '32px',
+                fill: '#fff',
+                backgroundColor: '#007bff', // Blue button background
+                padding: { x: 30, y: 15 },
+                borderRadius: '8px'
+            })
+            .setOrigin(0.5)
+            .setInteractive({ useHandCursor: true }); // Show hand cursor on hover
+
+            // Button interactivity
+            startButton.on('pointerdown', () => {
+                this.scene.start('PlayScene'); // Transition to the PlayScene
+            });
+
+            startButton.on('pointerover', () => startButton.setStyle({ fill: '#ff0', backgroundColor: '#0056b3' }));
+            startButton.on('pointerout', () => startButton.setStyle({ fill: '#fff', backgroundColor: '#007bff' }));
+
+            // Display the leaderboard when the scene is created/re-entered
+            this.displayLeaderboard();
+
+            // --- Fullscreen Button ---
+            const fullscreenButton = this.add.text(this.scale.width - 20, this.scale.height - 20, 'Fullscreen', {
+                fontSize: '18px',
+                fill: '#fff',
+                backgroundColor: '#555',
+                padding: { x: 15, y: 8 },
+                borderRadius: '5px'
+            })
+            .setOrigin(1, 1) // Set origin to bottom-right for consistent positioning
+            .setInteractive({ useHandCursor: true });
+
+            fullscreenButton.on('pointerdown', () => {
+                if (this.scale.isFullscreen) {
+                    this.scale.stopFullscreen(); // Exit fullscreen if already in it
+                } else {
+                    this.scale.startFullscreen(); // Request fullscreen
+                }
+            });
+
+            // Add hover effects for the fullscreen button
+            fullscreenButton.on('pointerover', () => fullscreenButton.setStyle({ fill: '#ff0', backgroundColor: '#777' }));
+            fullscreenButton.on('pointerout', () => fullscreenButton.setStyle({ fill: '#fff', backgroundColor: '#555' }));
+        }
+
+        /**
+         * Draws a monster character onto a Phaser.GameObjects.Graphics object.
+         * Copied from PlayScene for self-containment in this scene.
+         * @param {Phaser.GameObjects.Graphics} graphics - The graphics object to draw on.
+         */
+        drawMonster(graphics) {
+            graphics.clear(); // Clear any previous drawings.
+
+            // Body (Purple)
+            graphics.fillStyle(0x800080); // Purple color.
+            graphics.fillEllipse(0, 0, 30, 30); // Body: centered at (0,0), 30x30.
+
+            // Eyes and Mouth (Black)
+            graphics.fillStyle(0x000000); // Black color.
+            graphics.fillCircle(-8, -8, 3); // Left eye.
+            graphics.fillCircle(8, -8, 3);  // Right eye.
+            graphics.fillCircle(0, 8, 5);   // Mouth.
+
+            // Teeth (White)
+            graphics.fillStyle(0xFFFFFF); // White color.
+            graphics.fillTriangle(-12, 20, -4, 20, -8, 26); // Left tooth.
+            graphics.fillTriangle(4, 20, 12, 20, 8, 26);   // Right tooth.
+        }
+
+        /**
+         * Fetches and displays the top 10 leaderboard entries.
+         * Clears previous entries if the scene is re-entered.
+         */
+        displayLeaderboard() {
+            // Clear any previously displayed leaderboard text objects
+            this.leaderboardTextObjects.forEach(text => text.destroy());
+            this.leaderboardTextObjects = []; // Reset the array
+
+            const leaderboard = loadLeaderboard();
+
+            // Leaderboard Title
+            const lbTitle = this.add.text(this.scale.width - 210, 10, 'TOP 10 LEADERS', {
+                fontSize: '20px',
+                fill: '#FFD700', // Gold color
+                fontStyle: 'bold',
+                fontFamily: 'Inter, sans-serif'
+            }).setOrigin(0.5, 0); // Centered horizontally at its x, top-aligned vertically
+            this.leaderboardTextObjects.push(lbTitle);
+
+            if (leaderboard.length === 0) {
+                const noScoreText = this.add.text(this.scale.width - 210, 40, 'No scores yet!', {
+                    fontSize: '16px',
+                    fill: '#aaa',
+                    fontFamily: 'Inter, sans-serif'
+                }).setOrigin(0.5, 0);
+                this.leaderboardTextObjects.push(noScoreText);
+            } else {
+                leaderboard.forEach((entry, index) => {
+                    const yOffset = 40 + (index * 20); // Position each entry 20px below the previous
+                    const scoreText = this.add.text(this.scale.width - 210, yOffset,
+                        `${index + 1}. ${entry.name} - Round ${entry.round}`,
+                        { fontSize: '16px', fill: '#fff', fontFamily: 'Inter, sans-serif' }
+                    ).setOrigin(0.5, 0);
+                    this.leaderboardTextObjects.push(scoreText);
+                });
+            }
+        }
+    }
+
+    // --- Play Scene ---
+    class PlayScene extends Phaser.Scene {
+        constructor() {
+            super({ key: 'PlayScene' });
+            // Initialize game state variables. These will be reset in create() for new games.
+            this.playerHealth = 0;
+            this.roundNumber = 0;
+            this.monstersPerRound = 0;
+            // Declare a property to reuse for bullet world point calculations.
+            // It's initialized to null here and will be set to a Vector2 in create().
+            this.bulletWorldPoint = null;
+        }
+
+        preload() {
+            // Preload essential assets for the scene.
+            this.load.image('bullet', 'https://labs.phaser.io/assets/sprites/bullet.png');
+            // The weapon is drawn using Phaser.GameObjects.Graphics, so no image preloading is needed for it.
+        }
+
+        create() {
+            // --- Game State Initialization for a New Game ---
+            this.playerHealth = 3;
+            this.roundNumber = 0;
+            this.monstersPerRound = 5; // Base number of monsters for Round 1
+
+            // Initialize the Vector2 object to reuse for bullet positioning.
+            // This prevents creating a new object every time a bullet is fired, optimizing performance.
+            this.bulletWorldPoint = new Phaser.Math.Vector2();
+
+            // --- Player Character Setup ---
+            // 1. Create a Phaser.GameObjects.Graphics object to draw the player's body and face.
+            this.playerGraphics = this.add.graphics();
+            this.drawPlayerCharacterBody(this.playerGraphics);
+
+            // 2. Create a Phaser.GameObjects.Container to group the player's graphics and the gun graphics.
+            // This allows them to move, scale, and flip together as a single entity.
+            this.playerContainer = this.add.container(100, 300, [this.playerGraphics]);
+
+            // 3. Create a separate Phaser.GameObjects.Graphics object for the gun.
+            this.gunGraphics = this.add.graphics();
+            this.drawGun(this.gunGraphics); // Draw the simple gun shapes.
+
+            // Position the gun graphics relative to the playerContainer's origin (0,0).
+            // Adjust these X, Y values to perfectly position the drawn gun in the character's hand.
+            this.gunGraphics.x = 25;
+            this.gunGraphics.y = 20;
+            this.gunGraphics.setScale(0.5); // Set the scale for the gun graphics (made bigger as requested).
+            this.playerContainer.add(this.gunGraphics); // Add the drawn gun to the player container.
+
+            // 4. Enable Arcade Physics for the entire player container.
+            this.physics.add.existing(this.playerContainer);
+            this.playerContainer.body.setCollideWorldBounds(true); // Keep player within game boundaries.
+            this.playerContainer.setScale(1.5, 1.5); // Initial scale for the entire player character (facing right).
+
+            // 5. Manually define the physics body size and offset for the playerContainer.
+            // This makes the collision box accurately cover the visual representation of the player and their gun.
+            // Re-evaluating the character's visible area for a tighter hitbox, focusing on the main body.
+            // Approximate local coordinates for the main body (excluding most hair):
+            // Min X: 0 (from body rect)
+            // Max X: 20 (from body rect)
+            // Min Y: 5 (approx top of head ellipse)
+            // Max Y: 70 (bottom of body rect)
+            // Local Width = 20 - 0 = 20
+            // Local Height = 70 - 5 = 65
+            // Applied container scale (1.5, 1.5):
+            // Actual Width = 20 * 1.5 = 30
+            // Actual Height = 65 * 1.5 = 97.5
+            // Offset X = 0 * 1.5 = 0
+            // Offset Y = 5 * 1.5 = 7.5
+            this.playerContainer.body.setSize(30, 97.5); // Width, Height of the physics body.
+            this.playerContainer.body.setOffset(0, 7.5); // Adjusts the position of the physics body relative to the container's (0,0).
+
+            // --- User Interface (UI) Text Elements ---
+            this.healthText = this.add.text(10, 10, `Health: ${this.playerHealth}`, { fontSize: '16px', fill: '#fff' });
+            this.roundText = this.add.text(10, 30, `Round: ${this.roundNumber}`, { fontSize: '16px', fill: '#fff' });
+
+            // --- Physics Groups for Game Objects ---
+            this.monsters = this.physics.add.group(); // Group to manage all monster containers.
+            this.bullets = this.physics.add.group(); // Group to manage all bullet sprites.
+
+            // --- Input Configuration ---
+            this.cursors = this.input.keyboard.createCursorKeys(); // Standard arrow keys for movement.
+            this.keyE = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E); // 'E' key for shooting.
+
+            // --- Define Physics Interactions (Overlaps) ---
+            // When a bullet overlaps with a monster, call handleBulletMonsterCollision.
+            this.physics.add.overlap(this.bullets, this.monsters, this.handleBulletMonsterCollision, null, this);
+            // When the player overlaps with a monster, call handlePlayerMonsterCollision.
+            this.physics.add.overlap(this.playerContainer, this.monsters, this.handlePlayerMonsterCollision, null, this);
+
+            // --- Game Start ---
+            this.nextRound(); // Start the first round of the game.
+        }
+
+        update() {
+            // --- Player Movement Logic ---
+            this.playerContainer.body.setVelocity(0); // Stop player movement if no keys are currently pressed.
+
+            let isFacingRight = true; // Tracks player's facing direction for gun flipping.
+
+            if (this.cursors.left.isDown) {
+                this.playerContainer.body.setVelocityX(-200);
+                isFacingRight = false; // Player is moving left.
+                // Flip the entire container (player graphics + gun graphics)
+                this.playerContainer.setScale(-1.5, 1.5); // Flip X, maintain Y, apply total scale.
+            } else if (this.cursors.right.isDown) {
+                this.playerContainer.body.setVelocityX(200);
+                isFacingRight = true; // Player is moving right.
+                // Ensure container is not flipped for right-facing.
+                this.playerContainer.setScale(1.5, 1.5); // Maintain scale, no flip.
+            } else {
+                this.playerContainer.body.setVelocityX(0);
+            }
+
+            if (this.cursors.up.isDown) {
+                this.playerContainer.body.setVelocityY(-200);
+            } else if (this.cursors.down.isDown) {
+                this.playerContainer.body.setVelocityY(200);
+            }
+
+            // --- Shooting Logic ---
+            // Use JustDown to ensure the bullet fires only once per key press, not every frame the key is held.
+            if (Phaser.Input.Keyboard.JustDown(this.keyE)) {
+                this.shootBullet(isFacingRight);
+            }
+
+            // --- Monster Movement and Boundary Handling ---
+            this.monsters.getChildren().forEach(monsterContainer => {
+                // Apply vertical zig-zag movement. 'moveDirection' is a custom property added during spawning.
+                monsterContainer.body.setVelocityY(50 * monsterContainer.moveDirection);
+
+                // Reverse vertical direction if monster hits top or bottom world bounds.
+                const halfMonsterHeight = monsterContainer.body.height / 2;
+                if (monsterContainer.y - halfMonsterHeight <= 0) { // Monster hit the top boundary.
+                    monsterContainer.moveDirection = 1; // Change direction to move down.
+                } else if (monsterContainer.y + halfMonsterHeight >= this.scale.height) { // Monster hit the bottom boundary.
+                    monsterContainer.moveDirection = -1; // Change direction to move up.
+                }
+
+                // Optional: Reverse horizontal direction if monsters get too close to side boundaries.
+                // This prevents them from piling up on the edges.
+                if (monsterContainer.x < 50) {
+                    monsterContainer.body.setVelocityX(Math.abs(monsterContainer.body.velocity.x)); // Ensure positive velocity (move right).
+                } else if (monsterContainer.x > this.scale.width - 50) {
+                    monsterContainer.body.setVelocityX(-Math.abs(monsterContainer.body.velocity.x)); // Ensure negative velocity (move left).
+                }
+            });
+
+            // --- Bullet Cleanup ---
+            // Destroy bullets that go off-screen to prevent memory leaks and unnecessary processing.
+            this.bullets.getChildren().forEach(bullet => {
+                if (bullet.x < -10 || bullet.x > this.scale.width + 10 || bullet.y < -10 || bullet.y > this.scale.height + 10) {
+                    bullet.destroy();
+                }
+            });
+
+            // --- Round Progression ---
+            // If all monsters are defeated and at least one round has been played, advance to the next round.
+            if (this.monsters.getLength() === 0 && this.roundNumber > 0) {
+                this.nextRound();
+            }
+        }
+
+        // --- Helper Functions for Drawing Game Objects ---
+
+        /**
+         * Draws the main player character's body and face onto a Phaser.GameObjects.Graphics object.
+         * This function focuses solely on the character's visual appearance, not the weapon.
+         * @param {Phaser.GameObjects.Graphics} graphics - The graphics object to draw on.
+         */
+        drawPlayerCharacterBody(graphics) {
+            graphics.clear(); // Clear any previous drawings on this graphics object before redrawing.
+
+            // Skin (Head and Body)
+            graphics.fillStyle(0xFFDAB9); // Peach skin color (hexadecimal format).
+            graphics.fillEllipse(10, 20, 25, 30); // Head: centered at (10,20), 25 wide, 30 high.
+            graphics.fillRect(0, 30, 20, 40); // Body: starts at (0,30), 20 wide, 40 high.
+
+            // Hair (Saddle Brown)
+            graphics.fillStyle(0x8B4513);
+            graphics.fillRect(-3, -15, 26, 10); // Top hair.
+            graphics.fillRect(-7, -10, 5, 20); // Left sideburn/ear area.
+            graphics.fillRect(22, -10, 5, 20); // Right sideburn/ear area.
+            // Additional small rectangles for hair texture/detail.
+            graphics.fillRect(-1, -12, 2, 5);
+            graphics.fillRect(10, -10, 2, 4);
+            graphics.fillRect(18, -13, 2, 6);
+
+            // Eyes (Brown)
+            graphics.fillStyle(0x8B4513); // Brown color for eyes.
+            graphics.fillCircle(-8, -8, 3); // Left eye: centered at (-8,-8), radius 3.
+            graphics.fillCircle(8, -8, 3);  // Right eye: centered at (8,-8), radius 3.
+
+            // Nose (Peru - slightly darker skin tone)
+            graphics.fillStyle(0xCD853F);
+            graphics.fillTriangle(3, 2, 7, 2, 5, 8); // Simple triangle nose (x1, y1, x2, y2, x3, y3).
+
+            // Smiling Mouth (Black outline)
+            graphics.lineStyle(2, 0x000000, 1); // 2 pixels thick, black color, 100% opacity.
+            graphics.beginPath(); // Start a new path for drawing.
+            graphics.arc(5, 12, 7, 0, Math.PI, false); // Arc for a smile: centered at (5,12), radius 7, from 0 to PI radians (half circle).
+            graphics.strokePath(); // Render the arc based on the current line style.
+
+            // Teeth (White rectangles)
+            graphics.fillStyle(0xFFFFFF); // White color.
+            graphics.fillRect(2, 12, 2, 3); // Left tooth (x, y, width, height relative to graphics origin).
+            graphics.fillRect(6, 12, 2, 3); // Right tooth.
+        }
+
+        /**
+         * Draws the simple, geometric gun texture onto a Phaser.GameObjects.Graphics object.
+         * This is the "original" weapon texture.
+         * @param {Phaser.GameObjects.Graphics} graphics - The graphics object to draw on.
+         */
+        drawGun(graphics) {
+            graphics.clear(); // Clear any previous drawings on this graphics object.
+
+            // All coordinates below are relative to the gun graphics object's (0,0) origin.
+            graphics.fillStyle(0x555555); // Dark gray for the gun body
+            graphics.fillRect(0, 0, 30, 8); // Main body of the gun
+            graphics.fillRect(20, 8, 5, 12); // Handle
+
+            graphics.fillStyle(0x333333); // Darker gray for barrel tip
+            graphics.fillRect(30, 2, 10, 4); // Barrel
+        }
+
+        /**
+         * Draws a monster character onto a Phaser.GameObjects.Graphics object.
+         * @param {Phaser.GameObjects.Graphics} graphics - The graphics object to draw on.
+         */
+        drawMonster(graphics) {
+            graphics.clear(); // Clear any previous drawings.
+
+            // Body (Purple)
+            graphics.fillStyle(0x800080); // Purple color.
+            graphics.fillEllipse(0, 0, 30, 30); // Body: centered at (0,0), 30x30.
+
+            // Eyes and Mouth (Black)
+            graphics.fillStyle(0x000000); // Black color.
+            graphics.fillCircle(-8, -8, 3); // Left eye.
+            graphics.fillCircle(8, -8, 3);  // Right eye.
+            graphics.fillCircle(0, 8, 5);   // Mouth.
+
+            // Teeth (White)
+            graphics.fillStyle(0xFFFFFF); // White color.
+            graphics.fillTriangle(-12, 20, -4, 20, -8, 26); // Left tooth.
+            graphics.fillTriangle(4, 20, 12, 20, 8, 26);   // Right tooth.
+        }
+
+        // --- Game Logic Functions ---
+
+        /**
+         * Advances the game to the next round, increasing monster count.
+         */
+        nextRound() {
+            this.roundNumber++;
+            this.roundText.setText(`Round: ${this.roundNumber}`);
+            // Calculate the number of monsters for the current round (e.g., more monsters per round).
+            const numberOfMonsters = this.monstersPerRound * this.roundNumber;
+            this.spawnMonsters(numberOfMonsters);
+        }
+
+        /**
+         * Spawns a specified number of monsters at random positions on the right side of the screen.
+         * @param {number} count - The number of monsters to spawn.
+         */
+        spawnMonsters(count) {
+            for (let i = 0; i < count; i++) {
+                // Randomly determine spawn position on the right side of the screen.
+                const x = Phaser.Math.Between(400, 750);
+                const y = Phaser.Math.Between(50, this.scale.height - 50);
+
+                // Create graphics for the monster's body.
+                const monsterGraphics = this.add.graphics();
+                this.drawMonster(monsterGraphics);
+
+                // Create a container for the monster (if you add more parts later).
+                const monsterContainer = this.add.container(x, y, [monsterGraphics]);
+                this.monsters.add(monsterContainer); // Add to the monsters physics group.
+
+                // Enable physics for the monster container.
+                this.physics.add.existing(monsterContainer);
+                // Manually set physics body size and offset for accurate collision detection.
+                monsterContainer.body.setSize(40, 45);
+                monsterContainer.body.setOffset(-20, -22.5); // Adjust to center the body over the visual.
+
+                // Assign initial horizontal velocity and a random vertical direction for zig-zag movement.
+                const initialVelocityX = Phaser.Math.Between(-100, 100);
+                monsterContainer.body.setVelocityX(initialVelocityX);
+                // 'moveDirection' is a custom property added to the container to control vertical movement.
+                monsterContainer.moveDirection = Math.random() < 0.5 ? 1 : -1;
+            }
+        }
+
+        /**
+         * Handles the player shooting a bullet from the gun's barrel (drawn graphics).
+         * This version manually calculates the world position, compatible with older Phaser versions.
+         * @param {boolean} isFacingRight - True if the player (and gun) is facing right, false if left.
+         */
+        shootBullet(isFacingRight) {
+            const gunGraphics = this.gunGraphics;
+            const playerContainer = this.playerContainer;
+
+            // Define the base local position of the barrel tip relative to the gunGraphics's (0,0) origin
+            // before its own scale is applied. These values come directly from drawGun's dimensions.
+            const gunBaseBarrelTipX = 40; // End of the barrel rectangle (30 + 10)
+            const gunBaseBarrelTipY = 4;  // Center of the barrel rectangle (2 + 4/2)
+
+            // Step 1: Calculate the barrel tip's position relative to the gunGraphics's origin,
+            // considering its own scale (this is the visual offset from gunGraphics.x/y).
+            const scaledBarrelOffsetFromGunOriginX = gunBaseBarrelTipX * gunGraphics.scaleX;
+            const scaledBarrelOffsetFromGunOriginY = gunBaseBarrelTipY * gunGraphics.scaleY;
+
+            // Step 2: Calculate the world position of the gunGraphics's origin.
+            // This is playerContainer's world position plus the gunGraphics's relative position,
+            // scaled by the playerContainer's overall scale (which includes the flip).
+            const gunWorldX = playerContainer.x + (gunGraphics.x * playerContainer.scaleX);
+            const gunWorldY = playerContainer.y + (gunGraphics.y * playerContainer.scaleY);
+
+            // Step 3: Add the scaled barrel tip offset to get the final bullet spawn world position.
+            // The direction of the offset depends on whether the player container is flipped.
+            let bulletWorldSpawnX;
+            if (playerContainer.scaleX > 0) { // Player facing right (scaleX is positive)
+                bulletWorldSpawnX = gunWorldX + scaledBarrelOffsetFromGunOriginX;
+            } else { // Player facing left (scaleX is negative, meaning container is flipped)
+                // When flipped, the barrel visually extends to the left.
+                // So, subtract the offset to move left from the gun's world origin.
+                bulletWorldSpawnX = gunWorldX - scaledBarrelOffsetFromGunOriginX;
+            }
+
+            // Y coordinate calculation is simpler as playerContainer.scaleY is always positive (no vertical flip).
+            const bulletWorldSpawnY = gunWorldY + scaledBarrelOffsetFromGunOriginY;
+
+            // Use the pre-initialized this.bulletWorldPoint to store the result, avoiding new object creation.
+            this.bulletWorldPoint.set(bulletWorldSpawnX, bulletWorldSpawnY);
+
+            // Create the bullet using the calculated world coordinates.
+            const bullet = this.bullets.create(this.bulletWorldPoint.x, this.bulletWorldPoint.y, 'bullet');
+            bullet.setVelocityX(isFacingRight ? 400 : -400); // Set bullet velocity based on player's facing direction.
+            bullet.body.setAllowGravity(false); // Ensure bullet is not affected by gravity.
+        }
+
+        // --- Collision Handler Functions ---
+
+        /**
+         * Handles the collision between a bullet and a monster.
+         * @param {Phaser.GameObjects.Sprite} bullet - The bullet object.
+         * @param {Phaser.GameObjects.Container} monsterContainer - The monster container object.
+         */
+        handleBulletMonsterCollision(bullet, monsterContainer) {
+            bullet.destroy(); // Remove the bullet from the game.
+            monsterContainer.destroy(); // Remove the monster from the game and its group.
+        }
+
+        /**
+         * Handles the collision between the player and a monster.
+         * @param {Phaser.GameObjects.Container} playerContainer - The player container object.
+         * @param {Phaser.GameObjects.Container} monsterContainer - The monster container object.
+         */
+        handlePlayerMonsterCollision(playerContainer, monsterContainer) {
+            this.playerHealth--; // Decrease player health.
+            this.healthText.setText(`Health: ${this.playerHealth}`); // Update health display.
+
+            // Provide visual feedback for player taking damage (brief alpha flicker).
+            playerContainer.alpha = 0.5;
+            this.time.delayedCall(200, () => {
+                playerContainer.alpha = 1; // Restore full opacity after 200ms.
+            }, [], this);
+
+            monsterContainer.destroy(); // Monster is destroyed upon contact with the player.
+
+            if (this.playerHealth <= 0) {
+                // Pass the current round number to the GameOverScene when the player dies
+                this.scene.start('GameOverScene', { finalRound: this.roundNumber });
+            }
+        }
+    }
+
+    // --- Game Over Scene ---
+    class GameOverScene extends Phaser.Scene {
+        constructor() {
+            super({ key: 'GameOverScene' });
+            this.modalElements = []; // Array to hold Phaser GameObjects of the modal
+            this.inputElement = null; // Reference to the HTML input element
+        }
+
+        /**
+         * Create method for GameOverScene.
+         * @param {object} data - Data passed from the previous scene (e.g., finalRound).
+         */
+        create(data) {
+            // Retrieve the final round number, defaulting to 0 if not provided.
+            const finalRound = data ? data.finalRound : 0;
+
+            // Display "Game Over!" text
+            this.add.text(this.scale.width / 2, this.scale.height / 2 - 80, 'Game Over!', {
+                fontSize: '38px',
+                fill: '#fff',
+                align: 'center'
+            }).setOrigin(0.5);
+
+            // Display the round the player reached
+            this.add.text(this.scale.width / 2, this.scale.height / 2 - 30, `You reached Round: ${finalRound}`, {
+                fontSize: '28px',
+                fill: '#fff',
+                align: 'center'
+            }).setOrigin(0.5);
+
+            // Create the custom name input modal
+            this.createNameInputModal(finalRound);
+        }
+
+        /**
+         * Creates and displays a custom in-game modal for name input.
+         * @param {number} finalRound - The round number achieved by the player.
+         */
+        createNameInputModal(finalRound) {
+            // Dim background
+            const background = this.add.graphics();
+            background.fillStyle(0x000000, 0.7); // Black, 70% opacity
+            background.fillRect(0, 0, this.scale.width, this.scale.height);
+            background.setDepth(100); // Ensure it's on top
+
+            // Modal panel
+            const panel = this.add.graphics();
+            panel.fillStyle(0x2a2a2a, 1); // Dark gray
+            panel.lineStyle(2, 0x00ffff, 1); // Cyan border
+            panel.strokeRect(this.scale.width / 2 - 150, this.scale.height / 2 - 75, 300, 150);
+            panel.fillRect(this.scale.width / 2 - 150, this.scale.height / 2 - 75, 300, 150);
+            panel.setDepth(101);
+
+            // Instruction text
+            const instructionText = this.add.text(this.scale.width / 2, this.scale.height / 2 - 50, 'Enter your name:', {
+                fontSize: '24px',
+                fill: '#fff',
+                fontFamily: 'Inter, sans-serif'
+            }).setOrigin(0.5).setDepth(102);
+
+            // Create HTML input element
+            this.inputElement = document.createElement('input');
+            this.inputElement.type = 'text';
+            this.inputElement.placeholder = 'Player Name';
+            this.inputElement.maxLength = 15; // Limit length
+            this.inputElement.classList.add('custom-input'); // Apply custom CSS class
+
+            // Append input to the game container
+            document.getElementById('game-container').appendChild(this.inputElement);
+
+            // Position the input element over the canvas
+            // We need to wait for the next tick for the input's offsetWidth to be calculated correctly
+            this.time.delayedCall(10, () => {
+                const canvasBounds = this.game.canvas.getBoundingClientRect();
+                const gameContainerBounds = document.getElementById('game-container').getBoundingClientRect();
+
+                // Calculate position relative to the game-container
+                const inputX = (canvasBounds.width / 2) - (this.inputElement.offsetWidth / 2);
+                const inputY = (canvasBounds.height / 2) - (this.inputElement.offsetHeight / 2) + 10; // Adjust Y
+
+                this.inputElement.style.left = `${inputX}px`;
+                this.inputElement.style.top = `${inputY}px`;
+
+                // Focus the input field
+                this.inputElement.focus();
+            });
+
+
+            // Submit button
+            const submitButton = this.add.text(this.scale.width / 2, this.scale.height / 2 + 50, 'Submit', {
+                fontSize: '24px',
+                fill: '#fff',
+                backgroundColor: '#007bff',
+                padding: { x: 20, y: 10 },
+                borderRadius: '5px'
+            })
+            .setOrigin(0.5)
+            .setInteractive({ useHandCursor: true })
+            .setDepth(102);
+
+            // Store references to elements to destroy them later
+            this.modalElements = [background, panel, instructionText, submitButton];
+
+            submitButton.on('pointerdown', () => {
+                let username = this.inputElement.value.trim();
+                if (username === "") {
+                    username = "Anonymous";
+                } else {
+                    username = username.substring(0, 15); // Limit length
+                }
+
+                addScoreToLeaderboard(username, finalRound);
+
+                // Clean up modal elements and HTML input
+                this.modalElements.forEach(el => el.destroy());
+                if (this.inputElement && this.inputElement.parentNode) {
+                    this.inputElement.parentNode.removeChild(this.inputElement);
+                }
+                this.inputElement = null; // Clear reference
+
+                // Show the "Back to Start" button
+                this.showRestartButton();
+            });
+
+            // Handle Enter key press on the input field
+            this.inputElement.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    submitButton.emit('pointerdown'); // Trigger submit button click
+                }
+            });
+        }
+
+        /**
+         * Creates and displays the "Back to Start" button.
+         */
+        showRestartButton() {
+            const restartButton = this.add.text(this.scale.width / 2, this.scale.height / 2 + 50, 'Back to Start', {
+                fontSize: '24px',
+                fill: '#fff',
+                backgroundColor: '#333',
+                padding: { x: 20, y: 10 },
+                borderRadius: '5px'
+            })
+            .setOrigin(0.5)
+            .setInteractive({ useHandCursor: true }); // Show hand cursor on hover
+
+            // When the button is clicked, go back to the StartScene
+            restartButton.on('pointerdown', () => {
+                this.scene.start('StartScene');
+            });
+
+            // Add hover effects for visual feedback
+            restartButton.on('pointerover', () => restartButton.setStyle({ fill: '#ff0', backgroundColor: '#555' }));
+            restartButton.on('pointerout', () => restartButton.setStyle({ fill: '#fff', backgroundColor: '#333' }));
+        }
+    }
+
+    // --- Phaser Game Configuration ---
+    const config = {
+        type: Phaser.AUTO, // Automatically choose WebGL or Canvas rendering based on browser support.
+        width: 800, // Game canvas width.
+        height: 600, // Game canvas height.
+        physics: {
+            default: 'arcade', // Use Arcade Physics, a lightweight and fast physics system.
+            arcade: {
+                gravity: { y: 0 }, // No vertical gravity (suitable for top-down games like this).
+                debug: false // Set to 'false' to hide physics bodies.
+            }
+        },
+        scale: {
+            mode: Phaser.Scale.FIT, // Game will scale to fit the available space while maintaining its aspect ratio
+            autoCenter: Phaser.Scale.CENTER_BOTH, // Centers the game canvas horizontally and vertically
+            parent: 'game-container' // ID of the HTML element where the canvas will be appended
+        },
+        // Define the scenes to be loaded and used in the game.
+        // Start with StartScene
+        scene: [StartScene, PlayScene, GameOverScene]
+    };
+
+    // --- Initialize the Phaser Game Instance ---
+    window.onload = function() {
+        const game = new Phaser.Game(config);
+    };
+</script>
+
+</body>
+</html>
